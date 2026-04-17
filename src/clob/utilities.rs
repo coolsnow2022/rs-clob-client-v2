@@ -135,8 +135,7 @@ pub fn adjust_market_buy_amount(
     let base_f64: f64 = base.try_into().unwrap_or(0.0);
     let exp_f64: f64 = fee_exponent.try_into().unwrap_or(0.0);
     let pow_result = base_f64.powf(exp_f64);
-    let platform_fee_rate = fee_rate
-        * Decimal::try_from(pow_result).unwrap_or(Decimal::ZERO);
+    let platform_fee_rate = fee_rate * Decimal::try_from(pow_result).unwrap_or(Decimal::ZERO);
 
     // platform_fee = amount / price * platform_fee_rate
     let platform_fee = amount / price * platform_fee_rate;
@@ -167,7 +166,10 @@ mod tests {
     use super::*;
     use crate::types::{B256, U256};
 
-    fn make_orderbook(bids: Vec<OrderSummary>, asks: Vec<OrderSummary>) -> OrderBookSummaryResponse {
+    fn make_orderbook(
+        bids: Vec<OrderSummary>,
+        asks: Vec<OrderSummary>,
+    ) -> OrderBookSummaryResponse {
         OrderBookSummaryResponse::builder()
             .market(B256::ZERO)
             .asset_id(U256::ZERO)
@@ -202,10 +204,7 @@ mod tests {
 
     #[test]
     fn calculate_market_price_buy_insufficient_fok() {
-        let ob = make_orderbook(
-            vec![],
-            vec![order(dec!(0.50), dec!(10))],
-        );
+        let ob = make_orderbook(vec![], vec![order(dec!(0.50), dec!(10))]);
         // 0.50 * 10 = 5 USDC, need 100
         let result = calculate_market_price(&ob, Side::Buy, dec!(100), &OrderType::FOK);
         assert_eq!(result, None);
@@ -277,12 +276,12 @@ mod tests {
     #[test]
     fn adjust_market_buy_no_adjustment_when_balance_sufficient() {
         let result = adjust_market_buy_amount(
-            dec!(100),   // amount
-            dec!(1000),  // balance (way more than needed)
-            dec!(0.5),   // price
-            dec!(0.02),  // fee_rate
-            dec!(1),     // fee_exponent
-            dec!(0),     // builder fee
+            dec!(100),  // amount
+            dec!(1000), // balance (way more than needed)
+            dec!(0.5),  // price
+            dec!(0.02), // fee_rate
+            dec!(1),    // fee_exponent
+            dec!(0),    // builder fee
         );
         assert_eq!(result, dec!(100));
     }
@@ -290,12 +289,12 @@ mod tests {
     #[test]
     fn adjust_market_buy_adjusts_when_balance_insufficient() {
         let result = adjust_market_buy_amount(
-            dec!(100),   // amount
-            dec!(100),   // balance (equal to amount, but fees will push it over)
-            dec!(0.5),   // price
-            dec!(0.02),  // fee_rate
-            dec!(1),     // fee_exponent
-            dec!(0),     // builder fee
+            dec!(100),  // amount
+            dec!(100),  // balance (equal to amount, but fees will push it over)
+            dec!(0.5),  // price
+            dec!(0.02), // fee_rate
+            dec!(1),    // fee_exponent
+            dec!(0),    // builder fee
         );
         // Should be less than 100 since fees eat into the balance
         assert!(result < dec!(100));
@@ -305,12 +304,12 @@ mod tests {
     #[test]
     fn adjust_market_buy_with_builder_fee() {
         let result = adjust_market_buy_amount(
-            dec!(100),    // amount
-            dec!(100),    // balance
-            dec!(0.5),    // price
-            dec!(0),      // platform fee_rate
-            dec!(1),      // fee_exponent
-            dec!(0.005),  // builder taker fee (0.5%)
+            dec!(100),   // amount
+            dec!(100),   // balance
+            dec!(0.5),   // price
+            dec!(0),     // platform fee_rate
+            dec!(1),     // fee_exponent
+            dec!(0.005), // builder taker fee (0.5%)
         );
         // effective + effective * 0.005 = 100
         // effective * 1.005 = 100

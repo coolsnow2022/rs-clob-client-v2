@@ -39,12 +39,12 @@ use crate::clob::types::response::{
     BuilderFeeRateResponse, BuilderTradeResponse, CancelOrdersResponse, ClobMarketInfoResponse,
     CurrentRewardResponse, FeeRateResponse, GeoblockResponse, HeartbeatResponse,
     LastTradePriceResponse, LastTradesPricesResponse, MarketResponse, MarketRewardResponse,
-    MidpointResponse, MidpointsResponse, NegRiskResponse, NotificationResponse,
-    OpenOrderResponse, OrderBookSummaryResponse, OrderScoringResponse, OrdersScoringResponse,
-    Page, PostOrderResponse, PriceHistoryResponse, PriceResponse, PricesResponse,
-    ReadonlyApiKeyResponse, RewardsPercentagesResponse, SimplifiedMarketResponse, SpreadResponse,
-    SpreadsResponse, TickSizeResponse, TotalUserEarningResponse, TradeResponse,
-    UserEarningResponse, UserRewardsEarningResponse,
+    MidpointResponse, MidpointsResponse, NegRiskResponse, NotificationResponse, OpenOrderResponse,
+    OrderBookSummaryResponse, OrderScoringResponse, OrdersScoringResponse, Page, PostOrderResponse,
+    PriceHistoryResponse, PriceResponse, PricesResponse, ReadonlyApiKeyResponse,
+    RewardsPercentagesResponse, SimplifiedMarketResponse, SpreadResponse, SpreadsResponse,
+    TickSizeResponse, TotalUserEarningResponse, TradeResponse, UserEarningResponse,
+    UserRewardsEarningResponse,
 };
 #[cfg(feature = "rfq")]
 use crate::clob::types::{
@@ -1184,10 +1184,7 @@ impl<S: State> Client<S> {
     /// # Errors
     ///
     /// Returns an error if the HTTP request fails or the response cannot be parsed.
-    pub async fn clob_market_info(
-        &self,
-        condition_id: &str,
-    ) -> Result<ClobMarketInfoResponse> {
+    pub async fn clob_market_info(&self, condition_id: &str) -> Result<ClobMarketInfoResponse> {
         let request = self
             .client()
             .request(
@@ -1201,9 +1198,15 @@ impl<S: State> Client<S> {
 
         // Prime local caches from the response
         for token in &response.tokens {
-            self.inner.tick_sizes.insert(token.token_id, response.min_tick_size);
-            self.inner.neg_risk.insert(token.token_id, response.neg_risk);
-            self.inner.fee_rate_bps.insert(token.token_id, response.fee_rate_bps);
+            self.inner
+                .tick_sizes
+                .insert(token.token_id, response.min_tick_size);
+            self.inner
+                .neg_risk
+                .insert(token.token_id, response.neg_risk);
+            self.inner
+                .fee_rate_bps
+                .insert(token.token_id, response.fee_rate_bps);
         }
 
         Ok(response)
@@ -2063,7 +2066,10 @@ impl<K: Kind> Client<Authenticated<K>> {
     pub async fn create_readonly_api_key(&self) -> Result<ReadonlyApiKeyResponse> {
         let request = self
             .client()
-            .request(Method::POST, format!("{}auth/readonly-api-key", self.host()))
+            .request(
+                Method::POST,
+                format!("{}auth/readonly-api-key", self.host()),
+            )
             .build()?;
         let headers = self.create_headers(&request).await?;
 
@@ -2078,7 +2084,10 @@ impl<K: Kind> Client<Authenticated<K>> {
     pub async fn readonly_api_keys(&self) -> Result<Vec<ReadonlyApiKeyResponse>> {
         let request = self
             .client()
-            .request(Method::GET, format!("{}auth/readonly-api-keys", self.host()))
+            .request(
+                Method::GET,
+                format!("{}auth/readonly-api-keys", self.host()),
+            )
             .build()?;
         let headers = self.create_headers(&request).await?;
 
@@ -2143,10 +2152,7 @@ impl<K: Kind> Client<Authenticated<K>> {
     /// # Errors
     ///
     /// Returns an error if the HTTP request fails or the response cannot be parsed.
-    pub async fn builder_fee_rate(
-        &self,
-        builder_code: B256,
-    ) -> Result<BuilderFeeRateResponse> {
+    pub async fn builder_fee_rate(&self, builder_code: B256) -> Result<BuilderFeeRateResponse> {
         if let Some(cached) = self.inner.builder_fee_rates.get(&builder_code) {
             return Ok(cached.clone());
         }
@@ -2163,7 +2169,9 @@ impl<K: Kind> Client<Authenticated<K>> {
         let response: BuilderFeeRateResponse =
             crate::request(&self.inner.client, request, Some(headers)).await?;
 
-        self.inner.builder_fee_rates.insert(builder_code, response.clone());
+        self.inner
+            .builder_fee_rates
+            .insert(builder_code, response.clone());
 
         Ok(response)
     }
