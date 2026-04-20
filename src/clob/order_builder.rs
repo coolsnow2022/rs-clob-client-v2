@@ -454,8 +454,7 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
                     fee_rate,
                     fee_exponent,
                     builder_taker_fee,
-                )
-                .trunc_with_scale(USDC_DECIMALS);
+                )?;
                 Amount::usdc(adjusted)?
             }
             _ => amount,

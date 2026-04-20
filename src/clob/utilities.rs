@@ -7,7 +7,13 @@ use rust_decimal_macros::dec;
 use sha1::Digest as _;
 
 use super::types::response::{OrderBookSummaryResponse, OrderSummary};
-use super::types::{OrderType, Side, TickSize};
+use super::types::{Amount, AmountInner, OrderType, Side, TickSize};
+use crate::Result;
+use crate::error::Error;
+
+/// Number of decimal places in a USDC amount on-chain. Exposed so utility callers can
+/// use the same truncation semantics.
+pub const USDC_DECIMALS: u32 = 6;
 
 /// Walks orderbook levels in reverse (worst-to-best), accumulating via `accumulate`,
 /// and returns the cutoff price where cumulative ≥ `target`.
@@ -42,24 +48,48 @@ pub(crate) fn walk_levels<F: Fn(&OrderSummary) -> Decimal>(
     Some(levels[0].price)
 }
 
-/// Walks the orderbook to calculate the effective fill price for a given amount.
+/// Walks the orderbook to calculate the effective fill price for a given [`Amount`].
 ///
-/// For BUY, walks asks and accumulates cumulative USDC cost (`size * price`).
-/// For SELL, walks bids and accumulates cumulative token size.
-/// Returns `None` for [`OrderType::FOK`] if insufficient liquidity,
-/// or the best available price for other order types.
-#[must_use]
+/// The unit of `amount` (USDC vs shares) determines which side of the book is walked
+/// and how liquidity is accumulated:
+///
+/// | Side | Amount  | Walks | Accumulates      |
+/// |------|---------|-------|------------------|
+/// | Buy  | Usdc    | asks  | `size * price`   |
+/// | Buy  | Shares  | asks  | `size`           |
+/// | Sell | Shares  | bids  | `size`           |
+/// | Sell | Usdc    | — invalid, returns a validation error     |
+///
+/// # Errors
+/// - `Side::Sell` paired with an `Amount::usdc(_)` (SELL orders must size in shares).
+/// - `Side::Unknown`.
+/// - `OrderType::FOK` with insufficient liquidity at any level.
+///
+/// For non-FOK order types with insufficient liquidity, returns the best available price.
 pub fn calculate_market_price(
     orderbook: &OrderBookSummaryResponse,
     side: Side,
-    amount: Decimal,
+    amount: Amount,
     order_type: &OrderType,
-) -> Option<Decimal> {
-    match side {
-        Side::Buy => walk_levels(&orderbook.asks, amount, |l| l.size * l.price, order_type),
-        Side::Sell => walk_levels(&orderbook.bids, amount, |l| l.size, order_type),
-        Side::Unknown => None,
-    }
+) -> Result<Decimal> {
+    let (levels, acc): (&[OrderSummary], fn(&OrderSummary) -> Decimal) = match (side, amount.0) {
+        (Side::Buy, AmountInner::Usdc(_)) => (&orderbook.asks, |l| l.size * l.price),
+        (Side::Buy, AmountInner::Shares(_)) => (&orderbook.asks, |l| l.size),
+        (Side::Sell, AmountInner::Shares(_)) => (&orderbook.bids, |l| l.size),
+        (Side::Sell, AmountInner::Usdc(_)) => {
+            return Err(Error::validation(
+                "SELL orders must specify their amount in shares, not USDC",
+            ));
+        }
+        (Side::Unknown, _) => return Err(Error::validation(format!("Invalid side: {side}"))),
+    };
+
+    walk_levels(levels, amount.as_inner(), acc, order_type).ok_or_else(|| {
+        Error::validation(format!(
+            "Insufficient liquidity to fill {} on {side:?}",
+            amount.as_inner()
+        ))
+    })
 }
 
 /// Generates a server-compatible SHA1 hash of an orderbook snapshot.
@@ -133,11 +163,17 @@ pub fn orderbook_summary_hash(orderbook: &OrderBookSummaryResponse) -> String {
     format!("{result:x}")
 }
 
-/// Adjusts a market buy USDC amount to account for platform and builder fees.
+/// Adjusts a market-buy USDC amount to account for platform and builder taker fees.
 ///
-/// Only adjusts when `user_usdc_balance <= total_cost`. Returns the effective
-/// amount that can be traded after fees, or the original amount if balance is sufficient.
-#[must_use]
+/// Returns `amount` unchanged when `user_usdc_balance` already covers the total cost.
+/// Otherwise shrinks it so principal + fees = balance, then truncates to [`USDC_DECIMALS`]
+/// (matching the on-chain USDC scale). Returned amount is ready to pass to
+/// [`Amount::usdc`](super::types::Amount::usdc).
+///
+/// # Errors
+/// - `user_usdc_balance` is below the minimum to cover one USDC-unit of fees; the adjusted
+///   amount would truncate to zero, which would submit a zero-value order the backend
+///   rejects with an opaque error. Callers should top up the balance and retry.
 pub fn adjust_market_buy_amount(
     amount: Decimal,
     user_usdc_balance: Decimal,
@@ -145,7 +181,7 @@ pub fn adjust_market_buy_amount(
     fee_rate: Decimal,
     fee_exponent: Decimal,
     builder_taker_fee_rate: Decimal,
-) -> Decimal {
+) -> Result<Decimal> {
     let base = price * (Decimal::ONE - price);
     let base_f64: f64 = base.try_into().unwrap_or(0.0);
     let exp_f64: f64 = fee_exponent.try_into().unwrap_or(0.0);
@@ -155,12 +191,21 @@ pub fn adjust_market_buy_amount(
     let platform_fee = amount / price * platform_fee_rate;
     let total_cost = amount + platform_fee + amount * builder_taker_fee_rate;
 
-    if user_usdc_balance < total_cost {
+    let raw = if user_usdc_balance < total_cost {
         let divisor = Decimal::ONE + platform_fee_rate / price + builder_taker_fee_rate;
         user_usdc_balance / divisor
     } else {
         amount
+    };
+
+    let adjusted = raw.trunc_with_scale(USDC_DECIMALS);
+    if adjusted.is_zero() {
+        return Err(Error::validation(format!(
+            "user_usdc_balance {user_usdc_balance} too small to cover fees at price {price}; \
+             fee-adjusted amount truncated to zero"
+        )));
     }
+    Ok(adjusted)
 }
 
 /// Validates that a price is within the valid range `[tick_size, 1 - tick_size]`.
@@ -199,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn calculate_market_price_buy_sufficient_liquidity() {
+    fn calculate_market_price_buy_usdc_sufficient_liquidity() {
         let ob = make_orderbook(
             vec![],
             vec![
@@ -209,15 +254,36 @@ mod tests {
             ],
         );
         // Reversed walk: 0.52*100=52, 0.51*100=51, total=103 >= 80
-        let result = calculate_market_price(&ob, Side::Buy, dec!(80), &OrderType::FOK);
-        assert_eq!(result, Some(dec!(0.51)));
+        let amt = Amount::usdc(dec!(80)).unwrap();
+        assert_eq!(
+            calculate_market_price(&ob, Side::Buy, amt, &OrderType::FOK).unwrap(),
+            dec!(0.51),
+        );
+    }
+
+    #[test]
+    fn calculate_market_price_buy_shares_sufficient_liquidity() {
+        let ob = make_orderbook(
+            vec![],
+            vec![
+                order(dec!(0.50), dec!(100)),
+                order(dec!(0.51), dec!(100)),
+                order(dec!(0.52), dec!(100)),
+            ],
+        );
+        // Reversed walk (shares): 100, then 200 >= 150 → 0.51
+        let amt = Amount::shares(dec!(150)).unwrap();
+        assert_eq!(
+            calculate_market_price(&ob, Side::Buy, amt, &OrderType::FOK).unwrap(),
+            dec!(0.51),
+        );
     }
 
     #[test]
     fn calculate_market_price_buy_insufficient_fok() {
         let ob = make_orderbook(vec![], vec![order(dec!(0.50), dec!(10))]);
-        let result = calculate_market_price(&ob, Side::Buy, dec!(100), &OrderType::FOK);
-        assert_eq!(result, None);
+        let amt = Amount::usdc(dec!(100)).unwrap();
+        calculate_market_price(&ob, Side::Buy, amt, &OrderType::FOK).unwrap_err();
     }
 
     #[test]
@@ -226,12 +292,15 @@ mod tests {
             vec![],
             vec![order(dec!(0.50), dec!(10)), order(dec!(0.60), dec!(5))],
         );
-        let result = calculate_market_price(&ob, Side::Buy, dec!(1000), &OrderType::FAK);
-        assert_eq!(result, Some(dec!(0.50)));
+        let amt = Amount::usdc(dec!(1000)).unwrap();
+        assert_eq!(
+            calculate_market_price(&ob, Side::Buy, amt, &OrderType::FAK).unwrap(),
+            dec!(0.50),
+        );
     }
 
     #[test]
-    fn calculate_market_price_sell() {
+    fn calculate_market_price_sell_shares() {
         let ob = make_orderbook(
             vec![
                 order(dec!(0.50), dec!(100)),
@@ -241,29 +310,38 @@ mod tests {
             vec![],
         );
         // Reversed walk: 0.48 (100), 0.49 (200), need 150 tokens
-        let result = calculate_market_price(&ob, Side::Sell, dec!(150), &OrderType::FOK);
-        assert_eq!(result, Some(dec!(0.49)));
+        let amt = Amount::shares(dec!(150)).unwrap();
+        assert_eq!(
+            calculate_market_price(&ob, Side::Sell, amt, &OrderType::FOK).unwrap(),
+            dec!(0.49),
+        );
+    }
+
+    #[test]
+    fn calculate_market_price_sell_usdc_is_rejected() {
+        let ob = make_orderbook(
+            vec![order(dec!(0.49), dec!(100))],
+            vec![order(dec!(0.51), dec!(100))],
+        );
+        let amt = Amount::usdc(dec!(10)).unwrap();
+        calculate_market_price(&ob, Side::Sell, amt, &OrderType::FOK).unwrap_err();
     }
 
     #[test]
     fn calculate_market_price_empty_orderbook() {
         let ob = make_orderbook(vec![], vec![]);
-        assert_eq!(
-            calculate_market_price(&ob, Side::Buy, dec!(100), &OrderType::FOK),
-            None,
-        );
+        let amt = Amount::usdc(dec!(100)).unwrap();
+        calculate_market_price(&ob, Side::Buy, amt, &OrderType::FOK).unwrap_err();
     }
 
     #[test]
-    fn calculate_market_price_unknown_side_returns_none() {
+    fn calculate_market_price_unknown_side_errors() {
         let ob = make_orderbook(
             vec![order(dec!(0.49), dec!(100))],
             vec![order(dec!(0.51), dec!(100))],
         );
-        assert_eq!(
-            calculate_market_price(&ob, Side::Unknown, dec!(10), &OrderType::FOK),
-            None,
-        );
+        let amt = Amount::usdc(dec!(10)).unwrap();
+        calculate_market_price(&ob, Side::Unknown, amt, &OrderType::FOK).unwrap_err();
     }
 
     #[test]
@@ -348,7 +426,8 @@ mod tests {
             dec!(0.02),
             dec!(1),
             dec!(0),
-        );
+        )
+        .unwrap();
         assert_eq!(result, dec!(100));
     }
 
@@ -361,7 +440,8 @@ mod tests {
             dec!(0.02),
             dec!(1),
             dec!(0),
-        );
+        )
+        .unwrap();
         assert!(result < dec!(100));
         assert!(result > dec!(0));
     }
@@ -375,9 +455,25 @@ mod tests {
             dec!(0),
             dec!(1),
             dec!(0.005),
-        );
-        // effective * 1.005 = 100
-        let expected = dec!(100) / dec!(1.005);
+        )
+        .unwrap();
+        // effective * 1.005 = 100, truncated to 6 USDC decimals.
+        let expected = (dec!(100) / dec!(1.005)).trunc_with_scale(USDC_DECIMALS);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn adjust_market_buy_errors_when_balance_truncates_to_zero() {
+        // user_usdc_balance smaller than 1e-6 after fee-divisor → truncates to zero.
+        let err = adjust_market_buy_amount(
+            dec!(100),       // wanted amount
+            dec!(0.0000001), // balance well below 1 USDC-micro
+            dec!(0.5),
+            dec!(0.02),
+            dec!(1),
+            dec!(0.005),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("truncated to zero"));
     }
 }

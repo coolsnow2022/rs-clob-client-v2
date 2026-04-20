@@ -53,7 +53,9 @@ use crate::clob::types::{
     CreateRfqRequestRequest, CreateRfqRequestResponse, RfqQuote, RfqQuotesRequest, RfqRequest,
     RfqRequestsRequest,
 };
-use crate::clob::types::{OrderType, Side, SignableOrder, SignatureType, SignedOrder, TickSize};
+use crate::clob::types::{
+    Amount, OrderType, Side, SignableOrder, SignatureType, SignedOrder, TickSize,
+};
 use crate::error::{Error, Kind as ErrorKind, Synchronization};
 use crate::types::{Address, B256, Decimal};
 use crate::{
@@ -1258,24 +1260,21 @@ impl<S: State> Client<S> {
 
     /// Calculates the effective fill price for a market order by walking the orderbook.
     ///
-    /// Fetches the orderbook for `token_id` and delegates to
-    /// [`crate::clob::utilities::calculate_market_price`].
+    /// The unit of `amount` (USDC vs shares) determines which side of the book is walked
+    /// — see [`super::utilities::calculate_market_price`] for the full matrix.
     ///
     /// # Errors
     ///
-    /// Returns an error if the orderbook request fails or there is no liquidity
-    /// and `order_type` is [`OrderType::FOK`].
+    /// - Orderbook fetch fails.
+    /// - `side == Side::Sell` paired with an `Amount::usdc(_)`.
+    /// - `order_type == OrderType::FOK` with insufficient liquidity.
     pub async fn calculate_market_price(
         &self,
         token_id: U256,
         side: Side,
-        amount: Decimal,
+        amount: Amount,
         order_type: OrderType,
     ) -> Result<Decimal> {
-        if matches!(side, Side::Unknown) {
-            return Err(Error::validation(format!("Invalid side: {side}")));
-        }
-
         let book = self
             .order_book(&OrderBookSummaryRequest {
                 token_id,
@@ -1283,13 +1282,7 @@ impl<S: State> Client<S> {
             })
             .await?;
 
-        super::utilities::calculate_market_price(&book, side, amount, &order_type).ok_or_else(
-            || {
-                Error::validation(format!(
-                    "Insufficient liquidity to fill {amount} on {side:?} for {token_id}"
-                ))
-            },
-        )
+        super::utilities::calculate_market_price(&book, side, amount, &order_type)
     }
 
     fn client(&self) -> &ReqwestClient {
