@@ -361,12 +361,9 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
         let target = amount_inner.as_inner();
         let cutoff_price = match amount_inner {
-            AmountInner::Usdc(_) => super::utilities::walk_levels(
-                levels,
-                target,
-                |l| l.size * l.price,
-                &order_type,
-            ),
+            AmountInner::Usdc(_) => {
+                super::utilities::walk_levels(levels, target, |l| l.size * l.price, &order_type)
+            }
             AmountInner::Shares(_) => {
                 super::utilities::walk_levels(levels, target, |l| l.size, &order_type)
             }
