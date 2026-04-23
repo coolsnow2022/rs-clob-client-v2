@@ -15,12 +15,17 @@ use crate::error::Error;
 /// use the same truncation semantics.
 pub const USDC_DECIMALS: u32 = 6;
 
-/// Walks orderbook levels in reverse (worst-to-best), accumulating via `accumulate`,
-/// and returns the cutoff price where cumulative ≥ `target`.
+/// Walks orderbook levels best-to-worst, accumulating via `accumulate`, and returns
+/// the cutoff price where cumulative ≥ `target`.
+///
+/// The CLOB wire format delivers levels worst-first (asks descending, bids ascending),
+/// so iterating with `.rev()` produces the natural matching order. This means
+/// `levels[0]` is the worst price in the slice.
 ///
 /// If no level satisfies the target:
 /// - Returns `None` for [`OrderType::FOK`]
-/// - Returns the best available price (first level) for other order types
+/// - Returns the worst price in the slice (`levels[0]`) for other order types, so a
+///   market-order caller has a safe upper/lower bound for its limit price.
 ///
 /// Returns `None` for empty `levels`.
 pub(crate) fn walk_levels<F: Fn(&OrderSummary) -> Decimal>(
@@ -65,7 +70,8 @@ pub(crate) fn walk_levels<F: Fn(&OrderSummary) -> Decimal>(
 /// - `Side::Unknown`.
 /// - `OrderType::FOK` with insufficient liquidity at any level.
 ///
-/// For non-FOK order types with insufficient liquidity, returns the best available price.
+/// For non-FOK order types with insufficient liquidity, returns the worst price in the
+/// walked side of the book (a safe upper/lower bound for a market-order limit price).
 pub fn calculate_market_price(
     orderbook: &OrderBookSummaryResponse,
     side: Side,
@@ -246,15 +252,16 @@ mod tests {
 
     #[test]
     fn calculate_market_price_buy_usdc_sufficient_liquidity() {
+        // Asks are delivered worst-first on the wire, so the walk proceeds 0.50 → 0.51.
         let ob = make_orderbook(
             vec![],
             vec![
-                order(dec!(0.50), dec!(100)),
-                order(dec!(0.51), dec!(100)),
                 order(dec!(0.52), dec!(100)),
+                order(dec!(0.51), dec!(100)),
+                order(dec!(0.50), dec!(100)),
             ],
         );
-        // Reversed walk: 0.52*100=52, 0.51*100=51, total=103 >= 80
+        // 0.50*100 = 50, 0.51*100 = 51 → 101 ≥ 80
         let amt = Amount::usdc(dec!(80)).unwrap();
         assert_eq!(
             calculate_market_price(&ob, Side::Buy, amt, &OrderType::FOK).unwrap(),
@@ -267,12 +274,12 @@ mod tests {
         let ob = make_orderbook(
             vec![],
             vec![
-                order(dec!(0.50), dec!(100)),
-                order(dec!(0.51), dec!(100)),
                 order(dec!(0.52), dec!(100)),
+                order(dec!(0.51), dec!(100)),
+                order(dec!(0.50), dec!(100)),
             ],
         );
-        // Reversed walk (shares): 100, then 200 >= 150 → 0.51
+        // 100, then 200 ≥ 150 → 0.51
         let amt = Amount::shares(dec!(150)).unwrap();
         assert_eq!(
             calculate_market_price(&ob, Side::Buy, amt, &OrderType::FOK).unwrap(),
@@ -289,28 +296,31 @@ mod tests {
 
     #[test]
     fn calculate_market_price_buy_insufficient_fak() {
+        // Asks worst-first → 0.60 is levels[0]. FAK with insufficient liquidity
+        // falls back to that worst price so the caller gets a safe upper bound.
         let ob = make_orderbook(
             vec![],
-            vec![order(dec!(0.50), dec!(10)), order(dec!(0.60), dec!(5))],
+            vec![order(dec!(0.60), dec!(5)), order(dec!(0.50), dec!(10))],
         );
         let amt = Amount::usdc(dec!(1000)).unwrap();
         assert_eq!(
             calculate_market_price(&ob, Side::Buy, amt, &OrderType::FAK).unwrap(),
-            dec!(0.50),
+            dec!(0.60),
         );
     }
 
     #[test]
     fn calculate_market_price_sell_shares() {
+        // Bids are delivered worst-first on the wire, so the walk proceeds 0.50 → 0.49.
         let ob = make_orderbook(
             vec![
-                order(dec!(0.50), dec!(100)),
-                order(dec!(0.49), dec!(100)),
                 order(dec!(0.48), dec!(100)),
+                order(dec!(0.49), dec!(100)),
+                order(dec!(0.50), dec!(100)),
             ],
             vec![],
         );
-        // Reversed walk: 0.48 (100), 0.49 (200), need 150 tokens
+        // 100, then 200 ≥ 150 → 0.49
         let amt = Amount::shares(dec!(150)).unwrap();
         assert_eq!(
             calculate_market_price(&ob, Side::Sell, amt, &OrderType::FOK).unwrap(),
