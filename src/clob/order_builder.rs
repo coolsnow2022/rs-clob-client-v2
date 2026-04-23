@@ -27,12 +27,12 @@ pub(crate) const LOT_SIZE_SCALE: u32 = 2;
 
 /// Placeholder type for compile-time checks on limit order builders
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Limit;
 
 /// Placeholder type for compile-time checks on market order builders
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Market;
 
 /// Used to create an order iteratively and ensure validity with respect to its order kind.
@@ -381,7 +381,10 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
         let result = client.post_order(signed).await;
         if let Err(ref err) = result {
             if let Some(status) = err.downcast_ref::<crate::error::Status>() {
-                if status.message.contains(crate::clob::client::ORDER_VERSION_MISMATCH_ERROR) {
+                if status
+                    .message
+                    .contains(crate::clob::client::ORDER_VERSION_MISMATCH_ERROR)
+                {
                     let after_version = client.resolve_version(false).await.unwrap_or(0);
                     if after_version != before_version {
                         let order = retry.build().await?;
@@ -633,7 +636,10 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
         let result = client.post_order(signed).await;
         if let Err(ref err) = result {
             if let Some(status) = err.downcast_ref::<crate::error::Status>() {
-                if status.message.contains(crate::clob::client::ORDER_VERSION_MISMATCH_ERROR) {
+                if status
+                    .message
+                    .contains(crate::clob::client::ORDER_VERSION_MISMATCH_ERROR)
+                {
                     let after_version = client.resolve_version(false).await.unwrap_or(0);
                     if after_version != before_version {
                         let order = retry.build().await?;
