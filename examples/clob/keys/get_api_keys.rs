@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
         .authenticate()
         .await?;
 
-    println!("{:?}", client.api_keys().await?);
+    let _resp = client.api_keys().await?;
+    println!("api keys fetched");
     Ok(())
 }

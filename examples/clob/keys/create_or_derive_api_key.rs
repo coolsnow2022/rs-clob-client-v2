@@ -22,6 +22,7 @@ async fn main() -> anyhow::Result<()> {
     let client = Client::new(&host, Config::default())?;
     let creds = client.create_or_derive_api_key(&signer, None).await?;
 
-    println!("{creds:?}");
+    // Secret and passphrase are redacted; print only the public API key identifier.
+    println!("api key: {}", creds.key());
     Ok(())
 }

@@ -34,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
 
-    println!("{resp:?}");
+    println!("balance: {}", resp.balance);
+    println!("allowances: {} contract(s)", resp.allowances.len());
     Ok(())
 }

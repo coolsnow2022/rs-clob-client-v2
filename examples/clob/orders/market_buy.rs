@@ -36,6 +36,6 @@ async fn main() -> anyhow::Result<()> {
         .build_sign_and_post(&signer)
         .await?;
 
-    println!("{resp:?}");
+    println!("order_id={} status={}", resp.order_id, resp.status);
     Ok(())
 }

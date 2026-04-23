@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
         .authenticate()
         .await?;
 
-    println!("{:?}", client.delete_api_key().await?);
+    client.delete_api_key().await?;
+    println!("api key revoked");
     Ok(())
 }

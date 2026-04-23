@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
         .authenticate()
         .await?;
 
-    println!("{:?}", client.closed_only_mode().await?);
+    let resp = client.closed_only_mode().await?;
+    println!("closed_only: {}", resp.closed_only);
     Ok(())
 }

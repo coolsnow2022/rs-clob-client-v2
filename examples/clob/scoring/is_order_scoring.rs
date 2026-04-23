@@ -25,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
         .authenticate()
         .await?;
 
-    println!("{:?}", client.is_order_scoring(&order_id).await?);
+    let resp = client.is_order_scoring(&order_id).await?;
+    println!("{order_id} scoring: {}", resp.scoring);
     Ok(())
 }

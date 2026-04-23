@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
         .authenticate()
         .await?;
 
-    println!("{:?}", client.notifications().await?);
+    let notifications = client.notifications().await?;
+    println!("{} notification(s)", notifications.len());
     Ok(())
 }
