@@ -69,7 +69,7 @@ const VERSION_V2: Option<Cow<'static, str>> = Some(Cow::Borrowed("2"));
 
 const TERMINAL_CURSOR: &str = "LTE="; // base64("-1")
 
-const ORDER_VERSION_MISMATCH_ERROR: &str = "order_version_mismatch";
+pub(crate) const ORDER_VERSION_MISMATCH_ERROR: &str = "order_version_mismatch";
 
 /// The type used to build a request to authenticate the inner [`Client<Unauthorized>`]. Calling
 /// `authenticate` on this will elevate that inner `client` into an [`Client<Authenticated<K>>`].

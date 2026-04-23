@@ -36,7 +36,7 @@ pub struct Limit;
 pub struct Market;
 
 /// Used to create an order iteratively and ensure validity with respect to its order kind.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct OrderBuilder<OrderKind, K: AuthKind> {
     pub(crate) client: Client<Authenticated<K>>,
     pub(crate) signer: Address,
@@ -366,14 +366,32 @@ impl<K: AuthKind> OrderBuilder<Limit, K> {
 
     /// Convenience: builds, signs, and posts this limit order in a single call.
     ///
+    /// If the server rejects the order due to a version mismatch, this automatically retries
+    /// once with the updated version — rebuilding and re-signing the order from scratch.
+    ///
     /// # Errors
     ///
     /// Returns an error if any of the build, sign, or post steps fails.
     pub async fn build_sign_and_post<S: Signer>(self, signer: &S) -> Result<PostOrderResponse> {
         let client = self.client.clone();
+        let before_version = client.resolve_version(false).await.unwrap_or(0);
+        let retry = self.clone();
         let order = self.build().await?;
         let signed = client.sign(signer, order).await?;
-        client.post_order(signed).await
+        let result = client.post_order(signed).await;
+        if let Err(ref err) = result {
+            if let Some(status) = err.downcast_ref::<crate::error::Status>() {
+                if status.message.contains(crate::clob::client::ORDER_VERSION_MISMATCH_ERROR) {
+                    let after_version = client.resolve_version(false).await.unwrap_or(0);
+                    if after_version != before_version {
+                        let order = retry.build().await?;
+                        let signed = client.sign(signer, order).await?;
+                        return client.post_order(signed).await;
+                    }
+                }
+            }
+        }
+        result
     }
 }
 
@@ -600,14 +618,32 @@ impl<K: AuthKind> OrderBuilder<Market, K> {
 
     /// Convenience: builds, signs, and posts this market order in a single call.
     ///
+    /// If the server rejects the order due to a version mismatch, this automatically retries
+    /// once with the updated version — rebuilding and re-signing the order from scratch.
+    ///
     /// # Errors
     ///
     /// Returns an error if any of the build, sign, or post steps fails.
     pub async fn build_sign_and_post<S: Signer>(self, signer: &S) -> Result<PostOrderResponse> {
         let client = self.client.clone();
+        let before_version = client.resolve_version(false).await.unwrap_or(0);
+        let retry = self.clone();
         let order = self.build().await?;
         let signed = client.sign(signer, order).await?;
-        client.post_order(signed).await
+        let result = client.post_order(signed).await;
+        if let Err(ref err) = result {
+            if let Some(status) = err.downcast_ref::<crate::error::Status>() {
+                if status.message.contains(crate::clob::client::ORDER_VERSION_MISMATCH_ERROR) {
+                    let after_version = client.resolve_version(false).await.unwrap_or(0);
+                    if after_version != before_version {
+                        let order = retry.build().await?;
+                        let signed = client.sign(signer, order).await?;
+                        return client.post_order(signed).await;
+                    }
+                }
+            }
+        }
+        result
     }
 }
 
