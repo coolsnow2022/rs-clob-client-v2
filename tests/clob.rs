@@ -212,33 +212,6 @@ mod unauthenticated {
     }
 
     #[tokio::test]
-    async fn all_prices_should_succeed() -> anyhow::Result<()> {
-        let server = MockServer::start();
-        let client = Client::new(&server.base_url(), Config::default())?;
-
-        let mock = server.mock(|when, then| {
-            when.method(httpmock::Method::GET).path("/prices");
-            then.status(StatusCode::OK)
-                .json_body(json!({ token_1().to_string(): { "BUY": 0.5, "SELL": 0.6 } }));
-        });
-
-        let response = client.all_prices().await?;
-
-        let mut price_map = HashMap::new();
-        let mut side_map = HashMap::new();
-        side_map.insert(Side::Buy, dec!(0.5));
-        side_map.insert(Side::Sell, dec!(0.6));
-        price_map.insert(token_1(), side_map);
-
-        let expected = PricesResponse::builder().prices(price_map).build();
-
-        assert_eq!(response, expected);
-        mock.assert();
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn price_history_with_interval_should_succeed() -> anyhow::Result<()> {
         let server = MockServer::start();
         let client = Client::new(&server.base_url(), Config::default())?;
@@ -2518,8 +2491,8 @@ mod authenticated {
                 .query_param("position", "")
                 .query_param("no_competition", "false")
                 .query_param("signature_type", (SignatureType::Eoa as u8).to_string());
-            then.status(StatusCode::OK).json_body(json!(
-                [
+            then.status(StatusCode::OK).json_body(json!({
+                "data": [
                     {
                         "condition_id": "0x0000000000000000000000000000000000000000000000000000000c00d00123",
                         "question": "Will BTC be above $50k on December 31, 2025?",
@@ -2574,8 +2547,11 @@ mod authenticated {
                             }
                         ]
                     }
-                ]
-            ));
+                ],
+                "next_cursor": "LTE=",
+                "limit": 500,
+                "count": 1
+            }));
         });
 
         let request = UserRewardsEarningRequest::builder()
@@ -2585,7 +2561,7 @@ mod authenticated {
             .user_earnings_and_markets_config(&request, None)
             .await?;
 
-        let expected = vec![
+        let expected_entries = vec![
             UserRewardsEarningResponse::builder()
                 .condition_id(b256!(
                     "0000000000000000000000000000000000000000000000000000000c00d00123"
@@ -2644,7 +2620,9 @@ mod authenticated {
                 .build(),
         ];
 
-        assert_eq!(response, expected);
+        assert_eq!(response.data, expected_entries);
+        assert_eq!(response.next_cursor, "LTE=");
+        assert_eq!(response.count, 1);
         mock.assert();
 
         Ok(())

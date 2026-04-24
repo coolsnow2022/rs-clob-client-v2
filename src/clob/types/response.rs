@@ -9,8 +9,8 @@ use bon::Builder;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{
-    DefaultOnError, DefaultOnNull, NoneAsEmptyString, TimestampMilliSeconds, TimestampSeconds,
-    TryFromInto, serde_as,
+    DefaultOnError, DefaultOnNull, DisplayFromStr, NoneAsEmptyString, TimestampMilliSeconds,
+    TimestampSeconds, TryFromInto, serde_as,
 };
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
@@ -170,6 +170,21 @@ pub struct LastTradesPricesResponse {
     pub token_id: U256,
     pub price: Decimal,
     pub side: Side,
+}
+
+/// Response from `GET /markets-by-token/{token_id}`. This endpoint returns a minimal
+/// market descriptor — just the condition ID and the two outcome token IDs — not a full
+/// [`MarketResponse`]. Used to resolve `token_id -> condition_id` before fetching the
+/// full clob-market info.
+#[non_exhaustive]
+#[serde_as]
+#[derive(Debug, Clone, Deserialize, Builder, PartialEq)]
+pub struct MarketByTokenResponse {
+    pub condition_id: B256,
+    #[serde_as(as = "DisplayFromStr")]
+    pub primary_token_id: U256,
+    #[serde_as(as = "DisplayFromStr")]
+    pub secondary_token_id: U256,
 }
 
 #[expect(

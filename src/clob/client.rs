@@ -38,13 +38,13 @@ use crate::clob::types::response::{
     ApiKeysResponse, BalanceAllowanceResponse, BanStatusResponse, BuilderApiKeyResponse,
     BuilderFeeRateResponse, BuilderTradeResponse, CancelOrdersResponse, ClobMarketInfoResponse,
     CurrentRewardResponse, FeeInfo, FeeRateResponse, GeoblockResponse, HeartbeatResponse,
-    LastTradePriceResponse, LastTradesPricesResponse, MarketResponse, MarketRewardResponse,
-    MidpointResponse, MidpointsResponse, NegRiskResponse, NotificationResponse, OpenOrderResponse,
-    OrderBookSummaryResponse, OrderScoringResponse, OrdersScoringResponse, Page, PostOrderResponse,
-    PriceHistoryResponse, PriceResponse, PricesResponse, ReadonlyApiKeyResponse,
-    RewardsPercentagesResponse, SimplifiedMarketResponse, SpreadResponse, SpreadsResponse,
-    TickSizeResponse, TotalUserEarningResponse, TradeResponse, UserEarningResponse,
-    UserRewardsEarningResponse,
+    LastTradePriceResponse, LastTradesPricesResponse, MarketByTokenResponse, MarketResponse,
+    MarketRewardResponse, MidpointResponse, MidpointsResponse, NegRiskResponse,
+    NotificationResponse, OpenOrderResponse, OrderBookSummaryResponse, OrderScoringResponse,
+    OrdersScoringResponse, Page, PostOrderResponse, PriceHistoryResponse, PriceResponse,
+    PricesResponse, ReadonlyApiKeyResponse, RewardsPercentagesResponse, SimplifiedMarketResponse,
+    SpreadResponse, SpreadsResponse, TickSizeResponse, TotalUserEarningResponse, TradeResponse,
+    UserEarningResponse, UserRewardsEarningResponse,
 };
 #[cfg(feature = "rfq")]
 use crate::clob::types::{
@@ -744,23 +744,6 @@ impl<S: State> Client<S> {
         crate::request(&self.inner.client, request, None).await
     }
 
-    /// Retrieves prices for all available market outcome tokens.
-    ///
-    /// Returns the current best bid and ask prices for every active token
-    /// in the system. This is useful for getting a complete market overview.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request fails.
-    pub async fn all_prices(&self) -> Result<PricesResponse> {
-        let request = self
-            .client()
-            .request(Method::GET, format!("{}prices", self.host()))
-            .build()?;
-
-        crate::request(&self.inner.client, request, None).await
-    }
-
     /// Retrieves historical price data for a market outcome token.
     ///
     /// Returns time-series price data over a specified time range or interval.
@@ -1322,11 +1305,10 @@ impl<S: State> Client<S> {
             *cid
         } else {
             let market = self.market_by_token(token_id).await?;
-            let cid = market.condition_id.ok_or_else(|| {
-                Error::validation(format!("market for token {token_id} has no condition_id"))
-            })?;
-            self.inner.token_condition_map.insert(token_id, cid);
-            cid
+            self.inner
+                .token_condition_map
+                .insert(token_id, market.condition_id);
+            market.condition_id
         };
         self.clob_market_info(&condition_id.to_string()).await?;
         Ok(())
@@ -1352,7 +1334,7 @@ impl<S: State> Client<S> {
     /// # Errors
     ///
     /// Returns an error if the request fails or the token ID is invalid.
-    pub async fn market_by_token(&self, token_id: U256) -> Result<MarketResponse> {
+    pub async fn market_by_token(&self, token_id: U256) -> Result<MarketByTokenResponse> {
         let request = self
             .client()
             .request(
@@ -2173,7 +2155,7 @@ impl<K: Kind> Client<Authenticated<K>> {
         &self,
         request: &UserRewardsEarningRequest,
         next_cursor: Option<String>,
-    ) -> Result<Vec<UserRewardsEarningResponse>> {
+    ) -> Result<Page<UserRewardsEarningResponse>> {
         let params = request.query_params(next_cursor.as_deref());
         let request = self
             .client()

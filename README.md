@@ -48,7 +48,7 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-polymarket_client_sdk_v2 = "0.4"
+polymarket_client_sdk_v2 = "0.5"
 ```
 
 or
@@ -83,7 +83,7 @@ Enable features in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-polymarket_client_sdk_v2 = { version = "0.3", features = ["ws", "data"] }
+polymarket_client_sdk_v2 = { version = "0.5", features = ["ws", "data"] }
 ```
 
 ## Re-exported Types
@@ -226,7 +226,7 @@ The **signature_type** parameter tells the system how to verify your signatures:
 - `signature_type=2`: Browser wallet proxy signatures (when using a proxy contract, not direct wallet connections)
 - `signature_type=3`: EIP-1271 smart contract wallet signatures (**V2 orders only**)
 
-See [SignatureType](src/clob/types/mod.rs#L182) for more information.
+See [`SignatureType`](src/clob/types/mod.rs) for more information.
 
 ##### Place a market order
 
@@ -303,38 +303,54 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-##### V1 and V2 Orders
+##### V1 and V2 protocols
 
-The SDK supports both V1 (legacy) and V2 exchange contracts. **V2 is the default.** V2 orders add `timestamp`,
-`metadata`, and `builder` fields, and remove the V1-only `taker`, `nonce`, and `feeRateBps` fields. The EIP-712
-domain version is `"2"` for V2 orders.
+The SDK supports both V1 (legacy) and V2 exchange contracts. Protocol is **auto-detected** on
+the first order build via `GET /version` and cached for the lifetime of the `Client`. You pick
+the protocol by pointing the client at the corresponding host:
+
+| Protocol | Host                              | Collateral   | EIP-712 domain version |
+|----------|-----------------------------------|--------------|------------------------|
+| V2       | `https://clob-v2.polymarket.com` | pUSD         | `"2"`                  |
+| V1       | `https://clob.polymarket.com`     | USDC.e       | `"1"`                  |
+
+V2 orders add `timestamp`, `metadata`, and `builder` fields. V1 orders use `taker`, `nonce`,
+and `feeRateBps` instead. The order builder exposes both sets of fields — the ones that don't
+apply to the detected protocol are silently ignored at build time, so you can write one
+code-path that works against either server.
+
+V2-specific builder fields (ignored when the server runs V1):
 
 ```rust,ignore
-use alloy::primitives::B256;
-use polymarket_client_sdk_v2::clob::types::OrderVersion;
+use polymarket_client_sdk_v2::types::B256;
 
-// V2 order (default) — with metadata and builder attribution
 let order = client
     .limit_order()
     .token_id("<token-id>")
     .size(Decimal::ONE_HUNDRED)
     .price(dec!(0.5))
     .side(Side::Buy)
-    .metadata(B256::ZERO)           // optional: 32 bytes of custom metadata
-    .builder_code(B256::ZERO)       // optional: builder fee attribution
-    .defer_exec(false)              // optional: defer execution
+    .metadata(B256::ZERO)           // 32 bytes of custom metadata
+    .builder_code(B256::ZERO)       // builder fee attribution
+    .defer_exec(false)              // defer execution
     .build()
     .await?;
+```
 
-// V1 order (legacy) — explicitly opt in
+V1-specific builder fields (ignored when the server runs V2):
+
+```rust,ignore
+use polymarket_client_sdk_v2::types::Address;
+
 let order = client
     .limit_order()
-    .version(OrderVersion::V1)
     .token_id("<token-id>")
     .size(Decimal::ONE_HUNDRED)
     .price(dec!(0.5))
     .side(Side::Buy)
-    .nonce(0)                        // V1-only field
+    .taker(Address::ZERO)           // explicit taker; default zero = public order
+    .nonce(0)                       // on-chain cancel nonce; default 0
+    .fee_rate_bps(0)                // must match the market rate when set
     .build()
     .await?;
 ```
@@ -383,26 +399,31 @@ async fn main() -> anyhow::Result<()> {
 Real-time orderbook and user event streaming. Requires the `ws` feature.
 
 ```toml
-polymarket_client_sdk_v2 = { version = "0.3", features = ["ws"] }
+polymarket_client_sdk_v2 = { version = "0.5", features = ["ws"] }
 ```
 
 ```rust,ignore
+use std::str::FromStr as _;
+
 use futures::StreamExt as _;
 use polymarket_client_sdk_v2::clob::ws::Client;
+use polymarket_client_sdk_v2::types::U256;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let client = Client::default();
 
-    // Subscribe to orderbook updates for specific assets
-    let asset_ids = vec!["<asset-id>".to_owned()];
+    // Subscribe to orderbook updates for specific assets.
+    let asset_ids = vec![U256::from_str("<asset-id>")?];
     let stream = client.subscribe_orderbook(asset_ids)?;
     let mut stream = Box::pin(stream);
 
     while let Some(book_result) = stream.next().await {
         let book = book_result?;
-        println!("Orderbook update for {}: {} bids, {} asks",
-            book.asset_id, book.bids.len(), book.asks.len());
+        println!(
+            "Orderbook update for {}: {} bids, {} asks",
+            book.asset_id, book.bids.len(), book.asks.len()
+        );
     }
     Ok(())
 }
